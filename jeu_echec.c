@@ -1,477 +1,331 @@
-#include <ctype.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+/* ===== LES BIBLIOTHEQUES =====
+   Une bibliotheque est une boite a outils qu'on ajoute a son programme. */
+#include <stdio.h>    // pour afficher (printf) et lire au clavier (fgets)
+#include <string.h>   // pour comparer des textes (strncmp)
+#include <ctype.h>    // pour manipuler les lettres (tolower)
 
-#define BLANCS 1
-#define NOIRS  (-1)
 
-#define ROQUE_BLANC_ROI   1
-#define ROQUE_BLANC_DAME  2
-#define ROQUE_NOIR_ROI    4
-#define ROQUE_NOIR_DAME   8
+/* ===== Jeu d'echecs simplifie =====
+   Majuscule = pieces blanches, minuscule = pieces noires, '.' = case vide.
+   Lettres : p pion, r tour, n cavalier, b fou, q dame, k roi. */
 
-typedef struct {
-    char plateau[8][8];
-    int trait;
-    int roques;
-    int ep_ligne;
-    int ep_colonne;
-    int demi_coups;
-} Partie;
 
-typedef struct {
-    int depart_ligne, depart_colonne;
-    int arrivee_ligne, arrivee_colonne;
-    char promotion;
-    int prise_en_passant;
-    int roque;
-} Coup;
+/* ===== LES VARIABLES GLOBALES =====
+   Une variable globale est declaree en dehors des fonctions :
+   toutes les fonctions du programme peuvent la lire et la modifier. */
 
-static int couleur_piece(char piece) {
-    if (piece == '.') return 0;
-    return isupper((unsigned char)piece) ? BLANCS : NOIRS;
+// Le plateau : un tableau a 2 dimensions de 8 lignes et 8 colonnes.
+// Chaque case contient UN caractere (une lettre de piece ou un point).
+// plateau[0][0] est la case en haut a gauche (a8), plateau[7][7] celle en bas a droite (h1).
+char plateau[8][8];
+
+// Le joueur dont c'est le tour : 1 = blancs, 2 = noirs
+int joueur = 1;
+
+// Le coup tape par le joueur, transforme en numeros de lignes et de colonnes :
+// dep_l / dep_c = ligne et colonne de DEPART, arr_l / arr_c = ligne et colonne d'ARRIVEE
+int dep_l, dep_c, arr_l, arr_c;
+
+
+/* ---------- 1. Petites fonctions utiles ---------- */
+
+// Renvoie 1 (vrai) si le caractere est une majuscule, donc une piece blanche.
+// Les lettres majuscules vont de 'A' a 'Z' dans la table des caracteres.
+// Le && veut dire "ET" : les deux conditions doivent etre vraies.
+int est_blanc(char piece) { return piece >= 'A' && piece <= 'Z'; }
+
+// Pareil mais pour une minuscule, donc une piece noire
+int est_noir(char piece)  { return piece >= 'a' && piece <= 'z'; }
+
+// Renvoie la valeur sans le signe moins : -3 devient 3, 5 reste 5.
+// Utile pour mesurer une distance sans se soucier de la direction.
+int valeur_absolue(int x) {
+    if (x < 0) return -x;   // si le nombre est negatif, on change son signe
+    return x;               // sinon on le renvoie tel quel
 }
 
-static int dans_plateau(int ligne, int colonne) {
-    return ligne >= 0 && ligne < 8 && colonne >= 0 && colonne < 8;
+
+// Vrai si la piece est a nous (camp 1 = blancs, camp 2 = noirs)
+int appartient_au_joueur(char piece, int camp) {
+    if (camp == 1) return est_blanc(piece);   // le joueur 1 possede les majuscules
+    return est_noir(piece);                   // sinon le joueur 2 possede les minuscules
 }
 
-static void initialiser_partie(Partie *partie) {
-    static const char *lignes[] = {
+// Vrai si les deux pieces sont de camps differents
+// || veut dire "OU" : il suffit qu'une des deux situations soit vraie
+int sont_ennemies(char a, char b) {
+    return (est_blanc(a) && est_noir(b)) || (est_noir(a) && est_blanc(b));
+}
+
+
+/* ---------- 2. Preparer et afficher le plateau ---------- */
+
+// Met toutes les pieces a leur place de depart
+void initialiser_plateau() {
+    // Chaque texte est une ligne du plateau (8 lettres + 1 case cachee pour la fin du texte).
+    // La premiere ligne = rangee 8 (pieces noires), la derniere = rangee 1 (pieces blanches).
+    char depart[8][9] = {
         "rnbqkbnr", "pppppppp", "........", "........",
         "........", "........", "PPPPPPPP", "RNBQKBNR"
     };
-    int i;
-
-    for (i = 0; i < 8; ++i)
-        memcpy(partie->plateau[i], lignes[i], 8);
-    partie->trait = BLANCS;
-    partie->roques = ROQUE_BLANC_ROI | ROQUE_BLANC_DAME |
-                     ROQUE_NOIR_ROI | ROQUE_NOIR_DAME;
-    partie->ep_ligne = -1;
-    partie->ep_colonne = -1;
-    partie->demi_coups = 0;
+    // On recopie le modele "depart" dans le vrai plateau, case par case.
+    // La boucle exterieure (l) parcourt les lignes, l'interieure (c) les colonnes.
+    for (int l = 0; l < 8; l++)
+        for (int c = 0; c < 8; c++)
+            plateau[l][c] = depart[l][c];
 }
 
-static void afficher_plateau(const Partie *partie) {
-    int ligne, colonne;
-    puts("");
-    for (ligne = 0; ligne < 8; ++ligne) {
-        printf("%d  ", 8 - ligne);
-        for (colonne = 0; colonne < 8; ++colonne)
-            printf("%c ", partie->plateau[ligne][colonne]);
-        putchar('\n');
+
+// Dessine le plateau a l'ecran
+void afficher_plateau() {
+    printf("\n    a b c d e f g h\n\n");        // les lettres des colonnes en haut (\n = retour a la ligne)
+    for (int l = 0; l < 8; l++) {              // pour chaque ligne du plateau
+        printf(" %d  ", 8 - l);                // numero de rangee a gauche (la ligne 0 est la rangee 8)
+        for (int c = 0; c < 8; c++)            // pour chaque colonne de cette ligne
+            printf("%c ", plateau[l][c]);      // on affiche la piece suivie d'un espace
+        printf(" %d\n", 8 - l);                // numero de rangee a droite, puis retour a la ligne
     }
-    puts("\n   a b c d e f g h\n");
-    puts("Majuscules : blancs | Minuscules : noirs");
+    printf("\n    a b c d e f g h\n\n");        // les lettres des colonnes en bas
 }
 
-/* Indique si une case est attaquée par une pièce de la couleur demandée. */
-static int case_attaquee(const Partie *partie, int ligne, int colonne, int couleur) {
-    static const int cavaliers[8][2] = {
-        {-2,-1}, {-2,1}, {-1,-2}, {-1,2}, {1,-2}, {1,2}, {2,-1}, {2,1}
-    };
-    static const int directions[8][2] = {
-        {-1,-1}, {-1,1}, {1,-1}, {1,1}, {-1,0}, {0,-1}, {0,1}, {1,0}
-    };
-    int i, l, c;
-    char piece;
 
-    /* Les pions attaquent en diagonale, dans le sens de leur déplacement. */
-    l = ligne + (couleur == BLANCS ? 1 : -1);
-    for (i = -1; i <= 1; i += 2) {
-        c = colonne + i;
-        if (dans_plateau(l, c)) {
-            piece = partie->plateau[l][c];
-            if (couleur_piece(piece) == couleur && tolower((unsigned char)piece) == 'p')
+/* ---------- 3. Comment bougent les pieces ---------- */
+
+// Toutes les cases entre le depart et l'arrivee sont-elles vides ?
+// (l1,c1) = case de depart, (l2,c2) = case d'arrivee. Sert pour tour, fou et dame.
+int chemin_libre(int l1, int c1, int l2, int c2) {
+    // pas_l et pas_c disent dans quelle direction on avance a chaque etape :
+    // 1 = vers le bas / la droite, -1 = vers le haut / la gauche, 0 = on ne bouge pas
+    int pas_l = 0, pas_c = 0;
+    if (l2 > l1) pas_l = 1;
+    if (l2 < l1) pas_l = -1;
+    if (c2 > c1) pas_c = 1;
+    if (c2 < c1) pas_c = -1;
+
+
+    // On commence a la case juste APRES le depart
+    int l = l1 + pas_l, c = c1 + pas_c;
+    // On avance case par case jusqu'a arriver a la case d'arrivee (non incluse)
+    while (l != l2 || c != c2) {
+        if (plateau[l][c] != '.') return 0;   // une piece bloque le passage : chemin non libre
+        l = l + pas_l;                        // on avance d'une case
+        c = c + pas_c;
+    }
+    return 1;   // on n'a rien rencontre : le chemin est libre
+}
+
+
+// La tour se deplace en ligne droite (horizontalement ou verticalement)
+int mouvement_tour(int l1, int c1, int l2, int c2) {
+    if (l1 != l2 && c1 != c2) return 0;       // si la ligne ET la colonne changent, ce n'est pas droit
+    return chemin_libre(l1, c1, l2, c2);      // sinon il faut que rien ne bloque
+}
+
+
+// Le fou se deplace en diagonale
+int mouvement_fou(int l1, int c1, int l2, int c2) {
+    // En diagonale, on avance du meme nombre de cases en ligne et en colonne
+    if (valeur_absolue(l2 - l1) != valeur_absolue(c2 - c1)) return 0;
+    return chemin_libre(l1, c1, l2, c2);
+}
+
+
+// Le cavalier saute en "L" : 2 cases dans un sens et 1 case dans l'autre
+int mouvement_cavalier(int l1, int c1, int l2, int c2) {
+    int dl = valeur_absolue(l2 - l1);   // distance en lignes
+    int dc = valeur_absolue(c2 - c1);   // distance en colonnes
+    // Il saute par-dessus les pieces, donc pas besoin de verifier le chemin
+    return (dl == 2 && dc == 1) || (dl == 1 && dc == 2);
+}
+
+
+// Le roi avance d'une seule case dans n'importe quelle direction
+int mouvement_roi(int l1, int c1, int l2, int c2) {
+    return valeur_absolue(l2 - l1) <= 1 && valeur_absolue(c2 - c1) <= 1;
+}
+
+
+// Le pion a des regles particulieres : il avance tout droit mais prend en diagonale
+int mouvement_pion(int l1, int c1, int l2, int c2) {
+    char piece = plateau[l1][c1];   // la piece qui bouge
+    char cible = plateau[l2][c2];   // ce qu'il y a sur la case d'arrivee
+    // "sens" : direction de marche. Les blancs montent (le numero de ligne diminue : -1).
+    // "ligne_depart" : la ligne ou se trouvent les pions au debut de la partie.
+    int sens = -1, ligne_depart = 6;          // les blancs montent
+    if (est_noir(piece)) { sens = 1; ligne_depart = 1; }   // les noirs descendent
+
+
+    // avancer d'une case : meme colonne, une ligne plus loin, case d'arrivee vide
+    if (c1 == c2 && l2 == l1 + sens && cible == '.') return 1;
+    // avancer de deux cases depuis la ligne de depart (les deux cases doivent etre vides)
+    if (c1 == c2 && l1 == ligne_depart && l2 == l1 + 2 * sens
+        && cible == '.' && plateau[l1 + sens][c1] == '.') return 1;
+    // prendre en diagonale : une colonne a cote, une ligne plus loin, et il y a une piece a prendre
+    if (valeur_absolue(c2 - c1) == 1 && l2 == l1 + sens && cible != '.') return 1;
+    return 0;   // aucun des cas autorises : mouvement interdit
+}
+
+
+// La piece peut-elle aller de (l1,c1) a (l2,c2) ? (sans penser a l'echec)
+int mouvement_possible(int l1, int c1, int l2, int c2) {
+    char piece = plateau[l1][c1];   // la piece qu'on veut bouger
+    char cible = plateau[l2][c2];   // le contenu de la case d'arrivee
+    if (l1 == l2 && c1 == c2) return 0;                          // il faut bouger
+    if (cible != '.' && !sont_ennemies(piece, cible)) return 0;  // pas sur sa propre piece
+
+
+    // tolower met la lettre en minuscule : 'N' et 'n' deviennent 'n'.
+    // Comme ca on identifie le type de piece sans se soucier de sa couleur.
+    char type = tolower(piece);
+    if (type == 'p') return mouvement_pion(l1, c1, l2, c2);
+    if (type == 'r') return mouvement_tour(l1, c1, l2, c2);
+    if (type == 'b') return mouvement_fou(l1, c1, l2, c2);
+    if (type == 'n') return mouvement_cavalier(l1, c1, l2, c2);
+    // la dame = une tour + un fou
+    if (type == 'q') return mouvement_tour(l1, c1, l2, c2) || mouvement_fou(l1, c1, l2, c2);
+    if (type == 'k') return mouvement_roi(l1, c1, l2, c2);
+    return 0;   // case vide ou caractere inconnu : pas de mouvement
+}
+
+
+/* ---------- 4. Echec, coups legaux, fin de partie ---------- */
+
+// Le roi de ce camp est-il attaque ? (1 = oui, 0 = non)
+int roi_en_echec(int camp) {
+    char roi = 'K';              // le roi blanc s'ecrit K...
+    if (camp == 2) roi = 'k';    // ...et le roi noir s'ecrit k
+
+
+    int lr = -1, cr = -1;                     // 1) on cherche le roi (-1 = pas encore trouve)
+    for (int l = 0; l < 8; l++)
+        for (int c = 0; c < 8; c++)
+            if (plateau[l][c] == roi) { lr = l; cr = c; }   // on note sa position
+    if (lr == -1) return 0;                   // pas de roi sur le plateau : pas d'echec
+
+
+    int ennemi = 3 - camp;                    // 2) une piece ennemie peut-elle le prendre ?
+                                              // (3 - 1 = 2 et 3 - 2 = 1 : on obtient l'autre camp)
+    for (int l = 0; l < 8; l++)
+        for (int c = 0; c < 8; c++)
+            // si c'est une piece ennemie ET qu'elle peut aller sur la case du roi : echec !
+            if (appartient_au_joueur(plateau[l][c], ennemi) && mouvement_possible(l, c, lr, cr))
                 return 1;
-        }
-    }
-
-    for (i = 0; i < 8; ++i) {
-        l = ligne + cavaliers[i][0];
-        c = colonne + cavaliers[i][1];
-        if (dans_plateau(l, c)) {
-            piece = partie->plateau[l][c];
-            if (couleur_piece(piece) == couleur && tolower((unsigned char)piece) == 'n')
-                return 1;
-        }
-    }
-
-    for (i = 0; i < 8; ++i) {
-        l = ligne + directions[i][0];
-        c = colonne + directions[i][1];
-        while (dans_plateau(l, c)) {
-            piece = partie->plateau[l][c];
-            if (piece != '.') {
-                if (couleur_piece(piece) == couleur) {
-                    char type = (char)tolower((unsigned char)piece);
-                    if (type == 'k' && l == ligne + directions[i][0] &&
-                        c == colonne + directions[i][1])
-                        return 1;
-                    if ((i < 4 && (type == 'b' || type == 'q')) ||
-                        (i >= 4 && (type == 'r' || type == 'q')))
-                        return 1;
-                }
-                break;
-            }
-            l += directions[i][0];
-            c += directions[i][1];
-        }
-    }
-    return 0;
+    return 0;   // personne ne peut prendre le roi
 }
 
-static int roi_en_echec(const Partie *partie, int couleur) {
-    int ligne, colonne;
-    char roi = couleur == BLANCS ? 'K' : 'k';
-    for (ligne = 0; ligne < 8; ++ligne) {
-        for (colonne = 0; colonne < 8; ++colonne) {
-            if (partie->plateau[ligne][colonne] == roi)
-                return case_attaquee(partie, ligne, colonne, -couleur);
-        }
-    }
-    return 1; /* Un roi absent rend la position invalide. */
+
+// Le coup est legal s'il respecte les regles ET ne laisse pas notre roi en echec
+int coup_legal(int l1, int c1, int l2, int c2) {
+    char piece = plateau[l1][c1];
+    if (!appartient_au_joueur(piece, joueur)) return 0;   // pas notre piece
+    if (!mouvement_possible(l1, c1, l2, c2)) return 0;    // mouvement interdit
+
+
+    // On joue le coup "pour du faux", on regarde si notre roi est en danger, puis on annule.
+    char ancienne_cible = plateau[l2][c2];    // on memorise ce qu'il y avait a l'arrivee
+    plateau[l2][c2] = piece;                  // on essaie le coup...
+    plateau[l1][c1] = '.';
+    int echec = roi_en_echec(joueur);         // ...notre roi est-il attaque ?
+    plateau[l1][c1] = piece;                  // ...et on annule l'essai (la piece revient)
+    plateau[l2][c2] = ancienne_cible;         // (et la piece prise aussi)
+    return !echec;                            // legal seulement s'il n'y a PAS d'echec
 }
 
-static void ajouter_coup(Coup coups[], int *nombre, int dl, int dc,
-                         int al, int ac, char promotion, int ep, int roque) {
-    Coup *coup = &coups[*nombre];
-    coup->depart_ligne = dl;
-    coup->depart_colonne = dc;
-    coup->arrivee_ligne = al;
-    coup->arrivee_colonne = ac;
-    coup->promotion = promotion;
-    coup->prise_en_passant = ep;
-    coup->roque = roque;
-    ++*nombre;
+
+// Joue vraiment le coup sur le plateau (on suppose qu'il est deja verifie)
+void jouer_coup(int l1, int c1, int l2, int c2) {
+    plateau[l2][c2] = plateau[l1][c1];   // la piece arrive sur la case d'arrivee (elle ecrase une eventuelle piece prise)
+    plateau[l1][c1] = '.';               // la case de depart devient vide
+    // promotion : un pion arrive au bout devient une dame
+    if (plateau[l2][c2] == 'P' && l2 == 0) plateau[l2][c2] = 'Q';   // pion blanc arrive en rangee 8
+    if (plateau[l2][c2] == 'p' && l2 == 7) plateau[l2][c2] = 'q';   // pion noir arrive en rangee 1
 }
 
-static void ajouter_coup_pion(Coup coups[], int *nombre, int dl, int dc,
-                              int al, int ac, int ep) {
-    if (al == 0 || al == 7) {
-        ajouter_coup(coups, nombre, dl, dc, al, ac, 'q', ep, 0);
-        ajouter_coup(coups, nombre, dl, dc, al, ac, 'r', ep, 0);
-        ajouter_coup(coups, nombre, dl, dc, al, ac, 'b', ep, 0);
-        ajouter_coup(coups, nombre, dl, dc, al, ac, 'n', ep, 0);
-    } else {
-        ajouter_coup(coups, nombre, dl, dc, al, ac, 0, ep, 0);
-    }
+
+// Existe-t-il au moins un coup legal pour le joueur ?
+int a_un_coup_legal() {
+    // On teste TOUTES les cases de depart possibles (l1, c1)
+    // avec TOUTES les cases d'arrivee possibles (l2, c2).
+    for (int l1 = 0; l1 < 8; l1++)
+        for (int c1 = 0; c1 < 8; c1++)
+            for (int l2 = 0; l2 < 8; l2++)
+                for (int c2 = 0; c2 < 8; c2++)
+                    if (coup_legal(l1, c1, l2, c2)) return 1;   // on en a trouve un : on s'arrete
+    return 0;   // aucun coup possible
 }
 
-/* Génère les coups qui respectent le déplacement des pièces, avant le test d'échec. */
-static int coups_candidats(const Partie *partie, int couleur, Coup coups[]) {
-    static const int cavaliers[8][2] = {
-        {-2,-1}, {-2,1}, {-1,-2}, {-1,2}, {1,-2}, {1,2}, {2,-1}, {2,1}
-    };
-    static const int directions[8][2] = {
-        {-1,-1}, {-1,1}, {1,-1}, {1,1}, {-1,0}, {0,-1}, {0,1}, {1,0}
-    };
-    int nombre = 0, ligne, colonne, i, l, c, pas, depart_pion;
-    char piece, cible, type;
 
-    for (ligne = 0; ligne < 8; ++ligne) {
-        for (colonne = 0; colonne < 8; ++colonne) {
-            piece = partie->plateau[ligne][colonne];
-            if (couleur_piece(piece) != couleur) continue;
-            type = (char)tolower((unsigned char)piece);
-
-            if (type == 'p') {
-                pas = couleur == BLANCS ? -1 : 1;
-                depart_pion = couleur == BLANCS ? 6 : 1;
-                l = ligne + pas;
-                if (dans_plateau(l, colonne) && partie->plateau[l][colonne] == '.') {
-                    ajouter_coup_pion(coups, &nombre, ligne, colonne, l, colonne, 0);
-                    if (ligne == depart_pion && partie->plateau[l + pas][colonne] == '.')
-                        ajouter_coup(coups, &nombre, ligne, colonne, l + pas, colonne, 0, 0, 0);
-                }
-                for (i = -1; i <= 1; i += 2) {
-                    c = colonne + i;
-                    if (!dans_plateau(l, c)) continue;
-                    cible = partie->plateau[l][c];
-                    if (couleur_piece(cible) == -couleur)
-                        ajouter_coup_pion(coups, &nombre, ligne, colonne, l, c, 0);
-                    else if (l == partie->ep_ligne && c == partie->ep_colonne)
-                        ajouter_coup_pion(coups, &nombre, ligne, colonne, l, c, 1);
-                }
-            } else if (type == 'n') {
-                for (i = 0; i < 8; ++i) {
-                    l = ligne + cavaliers[i][0];
-                    c = colonne + cavaliers[i][1];
-                    if (dans_plateau(l, c) && couleur_piece(partie->plateau[l][c]) != couleur)
-                        ajouter_coup(coups, &nombre, ligne, colonne, l, c, 0, 0, 0);
-                }
-            } else if (type == 'k') {
-                for (i = 0; i < 8; ++i) {
-                    l = ligne + directions[i][0];
-                    c = colonne + directions[i][1];
-                    if (dans_plateau(l, c) && couleur_piece(partie->plateau[l][c]) != couleur)
-                        ajouter_coup(coups, &nombre, ligne, colonne, l, c, 0, 0, 0);
-                }
-
-                /* Le roi ne peut pas roquer en étant en échec ou en traversant une case attaquée. */
-                if (!roi_en_echec(partie, couleur) && ligne == (couleur == BLANCS ? 7 : 0) && colonne == 4) {
-                    int droit_roi = couleur == BLANCS ? ROQUE_BLANC_ROI : ROQUE_NOIR_ROI;
-                    int droit_dame = couleur == BLANCS ? ROQUE_BLANC_DAME : ROQUE_NOIR_DAME;
-                    int adversaire = -couleur;
-                    if ((partie->roques & droit_roi) &&
-                        partie->plateau[ligne][7] == (couleur == BLANCS ? 'R' : 'r') &&
-                        partie->plateau[ligne][5] == '.' && partie->plateau[ligne][6] == '.' &&
-                        !case_attaquee(partie, ligne, 5, adversaire) &&
-                        !case_attaquee(partie, ligne, 6, adversaire))
-                        ajouter_coup(coups, &nombre, ligne, colonne, ligne, 6, 0, 0, 1);
-                    if ((partie->roques & droit_dame) &&
-                        partie->plateau[ligne][0] == (couleur == BLANCS ? 'R' : 'r') &&
-                        partie->plateau[ligne][1] == '.' && partie->plateau[ligne][2] == '.' &&
-                        partie->plateau[ligne][3] == '.' &&
-                        !case_attaquee(partie, ligne, 3, adversaire) &&
-                        !case_attaquee(partie, ligne, 2, adversaire))
-                        ajouter_coup(coups, &nombre, ligne, colonne, ligne, 2, 0, 0, 1);
-                }
-            } else {
-                for (i = 0; i < 8; ++i) {
-                    int diagonale = i < 4;
-                    if ((type == 'b' && !diagonale) || (type == 'r' && diagonale)) continue;
-                    l = ligne + directions[i][0];
-                    c = colonne + directions[i][1];
-                    while (dans_plateau(l, c)) {
-                        cible = partie->plateau[l][c];
-                        if (couleur_piece(cible) == couleur) break;
-                        ajouter_coup(coups, &nombre, ligne, colonne, l, c, 0, 0, 0);
-                        if (cible != '.') break;
-                        l += directions[i][0];
-                        c += directions[i][1];
-                    }
-                }
-            }
-        }
+// Annonce mat ou pat si la partie est finie (renvoie 1), sinon renvoie 0
+int partie_terminee() {
+    if (a_un_coup_legal()) return 0;     // il reste un coup : la partie continue
+    // Plus aucun coup possible : soit mat, soit pat
+    if (roi_en_echec(joueur)) {          // roi attaque et aucun coup : echec et mat
+        if (joueur == 1) printf("Echec et mat ! Les noirs gagnent.\n");
+        else printf("Echec et mat ! Les blancs gagnent.\n");
+    } else {                             // roi pas attaque mais aucun coup : pat (match nul)
+        printf("Pat : partie nulle.\n");
     }
-    return nombre;
+    return 1;   // la partie est finie
 }
 
-static void jouer_coup(Partie *partie, const Coup *coup) {
-    int dl = coup->depart_ligne, dc = coup->depart_colonne;
-    int al = coup->arrivee_ligne, ac = coup->arrivee_colonne;
-    char piece = partie->plateau[dl][dc];
-    char capture = partie->plateau[al][ac];
-    int couleur = couleur_piece(piece);
 
-    if (coup->prise_en_passant) {
-        capture = partie->plateau[dl][ac];
-        partie->plateau[dl][ac] = '.';
-    }
+/* ---------- 5. Lire le coup tape par le joueur ---------- */
 
-    partie->plateau[al][ac] = piece;
-    partie->plateau[dl][dc] = '.';
+// Transforme "e2e4" en 4 nombres (dep_l, dep_c, arr_l, arr_c). Renvoie 1 si correct.
+int lire_coup(char texte[]) {
+    // On decoupe le texte tape : 1er caractere = colonne de depart, 2e = rangee de depart, etc.
+    char colonne1 = texte[0], rangee1 = texte[1];
+    char colonne2 = texte[2], rangee2 = texte[3];
+    // Les colonnes doivent etre des lettres de 'a' a 'h'
+    if (colonne1 < 'a' || colonne1 > 'h' || colonne2 < 'a' || colonne2 > 'h') return 0;
+    // Les rangees doivent etre des chiffres de '1' a '8'
+    if (rangee1 < '1' || rangee1 > '8' || rangee2 < '1' || rangee2 > '8') return 0;
 
-    if (coup->roque) {
-        if (ac == 6) {
-            partie->plateau[al][5] = partie->plateau[al][7];
-            partie->plateau[al][7] = '.';
-        } else {
-            partie->plateau[al][3] = partie->plateau[al][0];
-            partie->plateau[al][0] = '.';
-        }
-    }
 
-    if (coup->promotion) {
-        partie->plateau[al][ac] = couleur == BLANCS
-            ? (char)toupper((unsigned char)coup->promotion) : coup->promotion;
-    }
-
-    if (piece == 'K') partie->roques &= ~(ROQUE_BLANC_ROI | ROQUE_BLANC_DAME);
-    if (piece == 'k') partie->roques &= ~(ROQUE_NOIR_ROI | ROQUE_NOIR_DAME);
-    if (piece == 'R' && dl == 7 && dc == 0) partie->roques &= ~ROQUE_BLANC_DAME;
-    if (piece == 'R' && dl == 7 && dc == 7) partie->roques &= ~ROQUE_BLANC_ROI;
-    if (piece == 'r' && dl == 0 && dc == 0) partie->roques &= ~ROQUE_NOIR_DAME;
-    if (piece == 'r' && dl == 0 && dc == 7) partie->roques &= ~ROQUE_NOIR_ROI;
-    if (capture == 'R' && al == 7 && ac == 0) partie->roques &= ~ROQUE_BLANC_DAME;
-    if (capture == 'R' && al == 7 && ac == 7) partie->roques &= ~ROQUE_BLANC_ROI;
-    if (capture == 'r' && al == 0 && ac == 0) partie->roques &= ~ROQUE_NOIR_DAME;
-    if (capture == 'r' && al == 0 && ac == 7) partie->roques &= ~ROQUE_NOIR_ROI;
-
-    partie->ep_ligne = -1;
-    partie->ep_colonne = -1;
-    if (tolower((unsigned char)piece) == 'p' && abs(al - dl) == 2) {
-        partie->ep_ligne = (al + dl) / 2;
-        partie->ep_colonne = dc;
-    }
-
-    if (tolower((unsigned char)piece) == 'p' || capture != '.')
-        partie->demi_coups = 0;
-    else
-        ++partie->demi_coups;
-    partie->trait = -partie->trait;
+    // On convertit les caracteres en numeros utilisables dans le tableau
+    dep_c = colonne1 - 'a';          // 'e' - 'a' = 4 (les lettres se suivent dans la table des caracteres)
+    dep_l = 8 - (rangee1 - '0');     // '2' - '0' = 2, puis 8 - 2 = 6 : la rangee 2 est la ligne 6
+    arr_c = colonne2 - 'a';
+    arr_l = 8 - (rangee2 - '0');
+    return 1;   // le format est correct
 }
 
-static int coup_legal(const Partie *partie, const Coup *coup, int couleur) {
-    Partie copie = *partie;
-    jouer_coup(&copie, coup);
-    return !roi_en_echec(&copie, couleur);
-}
 
-static int coups_legaux(const Partie *partie, int couleur, Coup legaux[]) {
-    Coup candidats[256];
-    int n = coups_candidats(partie, couleur, candidats);
-    int i, nombre = 0;
-    for (i = 0; i < n; ++i) {
-        if (coup_legal(partie, &candidats[i], couleur))
-            legaux[nombre++] = candidats[i];
+/* ---------- 6. Le programme principal ---------- */
+
+// main est la fonction qui demarre en premier : c'est le point d'entree du programme
+int main() {
+    char entree[100] = "";      // un tableau de 100 caracteres pour stocker ce que le joueur tape
+    initialiser_plateau();      // on place les pieces
+    printf("=== Jeu d'echecs simplifie ===\n");
+    printf("Tapez un coup comme e2e4 (ou quitter).\n");
+
+
+    // Boucle infinie (while (1) est toujours vrai) : un tour de jeu par passage.
+    // On en sort uniquement avec "break".
+    while (1) {
+        afficher_plateau();
+        if (partie_terminee()) break;                  // mat ou pat : on sort de la boucle
+        if (roi_en_echec(joueur)) printf("Echec !\n"); // on previent le joueur si son roi est menace
+
+
+        // On affiche a qui c'est de jouer
+        if (joueur == 1) printf("Blancs : ");
+        else printf("Noirs : ");
+        // fgets lit une ligne tapee au clavier. Si la lecture echoue (NULL), on arrete.
+        if (fgets(entree, 100, stdin) == NULL) break;
+        // strncmp compare les 7 premiers caracteres : si le joueur a tape "quitter", on arrete (0 = identique)
+        if (strncmp(entree, "quitter", 7) == 0) break;
+
+
+        // Si le format n'est pas bon, on previent et "continue" recommence la boucle (meme joueur)
+        if (!lire_coup(entree)) { printf("Format invalide. Exemple : e2e4\n"); continue; }
+        // Si le coup est interdit par les regles, on previent et on recommence
+        if (!coup_legal(dep_l, dep_c, arr_l, arr_c)) { printf("Coup illegal !\n"); continue; }
+
+
+        jouer_coup(dep_l, dep_c, arr_l, arr_c);        // le coup est valide : on le joue
+        joueur = 3 - joueur;                           // 1 devient 2, 2 devient 1
     }
-    return nombre;
-}
-
-static int convertir_case(char colonne, char rangee, int *ligne, int *col) {
-    colonne = (char)tolower((unsigned char)colonne);
-    if (colonne < 'a' || colonne > 'h' || rangee < '1' || rangee > '8') return 0;
-    *col = colonne - 'a';
-    *ligne = 8 - (rangee - '0');
-    return 1;
-}
-
-static int texte_egal_sans_casse(const char *a, const char *b) {
-    while (*a && *b) {
-        if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) return 0;
-        ++a;
-        ++b;
-    }
-    return *a == '\0' && *b == '\0';
-}
-
-static int analyser_entree(const char *texte, int *dl, int *dc, int *al, int *ac,
-                           char *promotion, int *a_promotion) {
-    char copie[64];
-    size_t n = strlen(texte), debut = 0, fin;
-    while (n > 0 && isspace((unsigned char)texte[n - 1])) --n;
-    while (debut < n && isspace((unsigned char)texte[debut])) ++debut;
-    fin = n - debut;
-    if (fin >= sizeof(copie)) return 0;
-    memcpy(copie, texte + debut, fin);
-    copie[fin] = '\0';
-    if (fin != 4 && fin != 5) return 0;
-    if (!convertir_case(copie[0], copie[1], dl, dc) ||
-        !convertir_case(copie[2], copie[3], al, ac)) return 0;
-    *promotion = 0;
-    *a_promotion = fin == 5;
-    if (fin == 5) {
-        *promotion = (char)tolower((unsigned char)copie[4]);
-        if (*promotion != 'q' && *promotion != 'r' &&
-            *promotion != 'b' && *promotion != 'n') return 0;
-    }
-    return 1;
-}
-
-static int materiel_insuffisant(const Partie *partie) {
-    int ligne, colonne, pieces_mineures = 0, couleur_fou = -1;
-    char piece;
-    for (ligne = 0; ligne < 8; ++ligne) {
-        for (colonne = 0; colonne < 8; ++colonne) {
-            piece = (char)tolower((unsigned char)partie->plateau[ligne][colonne]);
-            if (piece == 'p' || piece == 'q' || piece == 'r') return 0;
-            if (piece == 'b' || piece == 'n') {
-                ++pieces_mineures;
-                if (piece == 'b') {
-                    int couleur_case = (ligne + colonne) % 2;
-                    if (couleur_fou != -1 && couleur_fou != couleur_case) return 0;
-                    couleur_fou = couleur_case;
-                } else {
-                    couleur_fou = -2;
-                }
-            }
-        }
-    }
-    return pieces_mineures <= 1 || (pieces_mineures > 0 && couleur_fou >= 0);
-}
-
-static void afficher_aide(void) {
-    puts("Entrez un coup avec les cases de depart et d'arrivee : e2e4, g1f3.");
-    puts("Pour promouvoir un pion, ajoutez q (dame), r (tour), b (fou) ou n (cavalier), par exemple e7e8q.");
-    puts("Le roque s'ecrit e1g1 ou e1c1 pour les blancs, e8g8 ou e8c8 pour les noirs.");
-    puts("Commandes : aide, quitter.");
-}
-
-int main(void) {
-    Partie partie;
-    char entree[128], promotion;
-    int dl, dc, al, ac, avec_promotion;
-    int couleur, n, i, trouve, coup_force;
-    Coup legaux[256];
-
-    initialiser_partie(&partie);
-    puts("=== Jeu d'echecs ===");
-    afficher_aide();
-
-    for (;;) {
-        afficher_plateau(&partie);
-        couleur = partie.trait;
-        printf("Trait des %s%s. Coup (ou aide/quitter) : ",
-               couleur == BLANCS ? "blancs" : "noirs",
-               roi_en_echec(&partie, couleur) ? " - echec" : "");
-
-        if (!fgets(entree, sizeof(entree), stdin)) {
-            puts("\nFin de la partie.");
-            break;
-        }
-        entree[strcspn(entree, "\r\n")] = '\0';
-        if (texte_egal_sans_casse(entree, "quitter") ||
-            texte_egal_sans_casse(entree, "quit") ||
-            texte_egal_sans_casse(entree, "exit")) {
-            puts("Partie terminee.");
-            break;
-        }
-        if (texte_egal_sans_casse(entree, "aide") ||
-            texte_egal_sans_casse(entree, "help") ||
-            strcmp(entree, "?") == 0) {
-            afficher_aide();
-            continue;
-        }
-
-        if (!analyser_entree(entree, &dl, &dc, &al, &ac, &promotion, &avec_promotion)) {
-            puts("Format invalide. Exemple : e2e4. Tapez aide pour les commandes.");
-            continue;
-        }
-
-        n = coups_legaux(&partie, couleur, legaux);
-        trouve = -1;
-        for (i = 0; i < n; ++i) {
-            if (legaux[i].depart_ligne == dl && legaux[i].depart_colonne == dc &&
-                legaux[i].arrivee_ligne == al && legaux[i].arrivee_colonne == ac) {
-                if (legaux[i].promotion) {
-                    char choix = avec_promotion ? promotion : 'q';
-                    if (legaux[i].promotion == choix) trouve = i;
-                } else if (!avec_promotion) {
-                    trouve = i;
-                }
-            }
-        }
-
-        if (trouve < 0) {
-            puts("Coup illegal. Verifiez les regles, les cases et votre roi.");
-            continue;
-        }
-
-        jouer_coup(&partie, &legaux[trouve]);
-        if (partie.demi_coups >= 100) {
-            afficher_plateau(&partie);
-            puts("Partie nulle : regle des 50 coups.");
-            break;
-        }
-        if (materiel_insuffisant(&partie)) {
-            afficher_plateau(&partie);
-            puts("Partie nulle : materiel insuffisant pour mater.");
-            break;
-        }
-
-        coup_force = coups_legaux(&partie, partie.trait, legaux);
-        if (coup_force == 0) {
-            afficher_plateau(&partie);
-            if (roi_en_echec(&partie, partie.trait))
-                printf("Echec et mat ! Les %s gagnent.\n", partie.trait == BLANCS ? "noirs" : "blancs");
-            else
-                puts("Partie nulle : pat.");
-            break;
-        }
-    }
-    return 0;
+    return 0;   // 0 = le programme s'est termine normalement
 }
